@@ -1,0 +1,160 @@
+#!/bin/bash
+
+set -e
+
+export R_VERSION=3.1.1
+export CMAKE_VERSION=2.8.12.2
+export ANT_VERSION=1.9.4
+export BOOST_VERSION=1_50_0
+export GWT_VERSION=2.6.0
+export GIN_VERSION=1.5
+export PANDOC_VERSION=1.12.3
+export SELENIUM_VERSION=2.37.0
+export CHROMEDRIVER_VERSION=2.7
+export RSTUDIO_VERSION=0.98.953
+
+export JDK_TARBALL=jdk-8u5-linux-x64.tar.gz
+export JDK_VERSION=1.8.0_05
+export JUNIT_JAR_FILE=junit-4.9b3.jar
+export SELENIUM_JAVA_ZIP=selenium-java-${SELENIUN_VERSION}.zip
+export SELENIUM_SERVER_JAR=selenium-server-standalone-${SELENIUN_VERSION}.jar
+export CHROMEDRIVER_FILE=chromedriver-linux
+export CORE_DICTIONARIES_FILE=core-dictionaries.zip
+export MATHJAX_FILE=mathjax-20.zip
+export PANDOC_FILE=pandoc-1.12.3.zip
+
+# Compile R
+cd /var/cache/work
+if [ ! -f /var/cache/work/R-${R_VERSION}.tar.gz ]; then
+  wget -q -O /var/cache/work/R-${R_VERSION}.tar.gz http://cran.rstudio.com/src/base/R-3/R-${R_VERSION}.tar.gz
+fi
+tar zxf /var/cache/work/R-${R_VERSION}.tar.gz
+
+pushd R-${R_VERSION}
+  ./configure --prefix=/app/R
+make
+make install
+popd
+
+# Package R
+cd /app
+tar cjvf R-${R_VERSION}.tar.bz2 R
+mkdir -p /var/cache/work/out
+cp R-${R_VERSION}.tar.bz2 /var/cache/work/out
+
+# Compile cmake
+cd /var/cache/work
+if [ ! -f /var/cache/work/cmake-${CMAKE_VERSION}.tar.gz ]; then
+  wget -q -O /var/cache/work/cmake-${CMAKE_VERSION}.tar.gz http://www.cmake.org/files/v2.8/cmake-${CMAKE_VERSION}.tar.gz
+fi
+tar zxf /var/cache/work/cmake-${CMAKE_VERSION}.tar.gz
+
+pushd cmake-${CMAKE_VERSION}
+  ./configure --prefix=/app/cmake
+make
+make install
+popd
+
+# Package cmake
+cd /app
+tar cjvf cmake-${CMAKE_VERSION}.tar.bz2 cmake
+mkdir -p /var/cache/work/out
+cp cmake-${CMAKE_VERSION}.tar.bz2 /var/cache/work/out
+
+# setup cmake path
+PATH="/app/cmake/bin:${PATH}"
+
+# setup java and ant
+cd /app
+tar zxf /var/cache/work/${JDK_TARBALL}
+export JAVA_HOME="${PWD}/jdk${JDK_VERSION}"
+export PATH="${JAVA_HOME}/bin:${PATH}"
+tar zxf /var/cache/work/apache-ant-${ANT_VERSION}-bin.tar.gz
+export ANT_HOME="${PWD}/apache-ant-${ANT_VERSION}"
+export PATH="${ANT_HOME}/bin:${PATH}"
+
+# build boost
+cd /var/cache/work
+tar zxf boost_${BOOST_VERSION}.tar.gz
+pushd boost_${BOOST_VERSION}
+./bootstrap.sh
+./bjam --prefix=/app/boost variant=release install
+popd
+
+# Compile RStudio server
+cd /var/cache/work
+if [ ! -f /var/cache/work/rstudio-${RSTUDIO_VERSION}.tar.gz ]; then
+  wget -q -O /var/cache/work/rstudio-${RSTUDIO_VERSION}.tar.gz https://github.com/rstudio/rstudio/archive/v${RSTUDIO_VERSION}.tar.gz
+fi
+tar zxf /var/cache/work/rstudio-${RSTUDIO_VERSION}.tar.gz
+
+RSTUDIO_SRC=/var/cache/work/rstudio-${RSTUDIO_VERSION}
+GWT_LIB_DIR="${RSTUDIO_SRC}/src/gwt/lib"
+GIN_DIR="${GWT_LIB_DIR}/gin/${GIN_VERSION}"
+GWT_DIR="${GWT_LIB_DIR}/gwt/${GWT_VERSION}"
+SELENIUM_DIR="${GWT_LIB_DIR}/selenium/${SELENIUM_VERSION}"
+CHROMEDRIVER_LIB_DIR="${GWT_LIB_DIR}/selenium/chromedriver/${CHROMEDRIVER_VERSION}"
+JUNIT_JAR="${GWT_LIB_DIR}/${JUNIT_JAR_FILE}"
+
+DEPENDENCIES_COMMON_DIR="${RSTUDIO_SRC}/dependencies/common"
+DICTIONARIES_DIR="${DEPENDENCIES_COMMON_DIR}/dictionaries"
+MATHJAX_DIR="${DEPENDENCIES_COMMON_DIR}/mathjax"
+PANDOC_DIR="${DEPENDENCIES_COMMON_DIR}/pandoc/${PANDOC_VERSION}"
+
+# copy deps
+# gin
+mkdir -p ${GIN_DIR}
+unzip -qd ${GIN_DIR} /var/cache/work/gin-${GIN_VERSION}.zip
+# gwt
+mkdir -p ${GWT_LIB_DIR}/gwt
+unzip -qd ${GWT_LIB_DIR} /var/cache/work/gwt-${GWT_VERSION}.zip
+mv ${GWT_LIB_DIR}/gwt-${GWT_VERSION} ${GWT_DIR}
+cp "/var/cache/work/${JUNIT_JAR_FILE}" ${JUNIT_JAR}
+
+mkdir -p ${GWT_LIB_DIR}/selenium
+unzip -qd "${GWT_LIB_DIR}" "/var/cache/work/${SELENIUM_JAVA_ZIP}"
+mv "${GWT_LIB_DIR}/selenium-${SELENIUM_VERSION}" ${SELENIUM_DIR}
+cp "/var/cache/work/${SELENIUM_SERVER_JAR}" ${SELENIUM_DIR}
+mkdir -p ${CHROMEDRIVER_LIB_DIR}
+cp "/var/cache/work/${CHROMEDRIVER_FILE}" ${CHROMEDRIVER_LIB_DIR}
+chmod u+x $CHROMEDRIVER_LIB_DIR/*
+
+# prepare dictionaries
+mkdir -p ${DICTIONARIES_DIR}
+unzip -qd ${DICTIONARIES_DIR} "/var/cache/work/${CORE_DICTIONARIES_FILE}"
+
+# prepare mathjax
+unzip -qd ${DEPENDENCIES_COMMON_DIR} "/var/cache/work/${MATHJAX_FILE}"
+
+# prepare pandoc
+pushd /var/cache/work
+unzip -q pandoc-${PANDOC_VERSION}.zip
+mkdir -p ${PANDOC_DIR}
+mv pandoc-${PANDOC_VERSION}/linux/debian/x86_64/pandoc* ${PANDOC_DIR}
+popd
+
+# "install package" need R in path
+export PATH="/app/R/bin:${PATH}"
+# prepare packages
+pushd ${DEPENDENCIES_COMMON_DIR}
+./install-packages
+popd
+
+export PATH="/app/cmake/bin:${PATH}"
+pushd rstudio-${RSTUDIO_VERSION}
+mkdir build
+cd build
+cmake .. -DRSTUDIO_TARGET=Server -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/app/rstudio-server
+make
+make install
+popd
+
+export BOOST_INCLUDEDIR=/app/boost/include
+export BOOST_LIBRARYDIR=/app/boost/lib
+export LD_LIBRARY_PATH="/app/R/lib64/R/lib:${LD_LIBRARY_PATH}"
+# Package RStudio server
+cd /app
+tar cjvf rstudio-server-${RSTUDIO_VERSION}.tar.bz2 rstudio-server
+mkdir -p /var/cache/work/out
+cp rstudio-server-${RSTUDIO_VERSION}.tar.bz2 /var/cache/work/out
+
